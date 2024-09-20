@@ -1,0 +1,8 @@
+Disallow: /admin/
+Disallow: /api/
+Disallow: /user/
+Disallow: /login
+Disallow: /register
+Disallow: /reset-password
+
+Sitemap: https://www.example.com/sitemap.xml
