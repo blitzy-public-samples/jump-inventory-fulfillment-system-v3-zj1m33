@@ -1,0 +1,86 @@
+# GitHub Actions workflow for Continuous Deployment (CD) of the Inventory Management and Fulfillment Application
+
+name: Continuous Deployment
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: inventory-management-app
+  ECS_SERVICE: inventory-management-service
+  ECS_CLUSTER: inventory-management-cluster
+  ECS_TASK_DEFINITION: inventory-management-task-definition
+
+jobs:
+  deploy:
+    name: Deploy to AWS ECS
+    runs-on: ubuntu-latest
+    steps:
+      # Step 1: Checkout the code from the repository
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      # Step 2: Configure AWS credentials for authentication
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 3: Login to Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      # Step 4: Build, tag, and push the Docker image to Amazon ECR
+      - name: Build, tag, and push image to Amazon ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      # Step 5: Update the ECS task definition with the new image details
+      - name: Update ECS task definition
+        run: |
+          sed -i.bak 's|{{ECR_REGISTRY}}|'${ECR_REGISTRY}'|' ${ECS_TASK_DEFINITION}
+          sed -i.bak 's|{{ECR_REPOSITORY}}|'${ECR_REPOSITORY}'|' ${ECS_TASK_DEFINITION}
+          sed -i.bak 's|{{IMAGE_TAG}}|'${IMAGE_TAG}'|' ${ECS_TASK_DEFINITION}
+
+      # Step 6: Deploy the updated task definition to Amazon ECS
+      - name: Deploy Amazon ECS task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v1
+        with:
+          task-definition: ${{ env.ECS_TASK_DEFINITION }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # Step 7: Run database migrations
+      - name: Run database migrations
+        run: aws ecs run-task --cluster ${{ env.ECS_CLUSTER }} --task-definition ${{ env.ECS_TASK_DEFINITION }} --overrides '{"containerOverrides":[{"name":"inventory-management-app","command":["npm","run","migrate"]}]}'
+
+      # Step 8: Notify deployment status via Slack
+      - name: Notify deployment status
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: "Deployment to ECS ${{ job.status }}"
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+        if: always()
+
+# Human tasks:
+# - Review and update the AWS region in the env section if different from us-east-1
+# - Ensure that AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY) are properly set in GitHub Secrets
+# - Verify that the ECR repository, ECS service, cluster, and task definition names are correct
+# - Set up a Slack webhook and add the SLACK_WEBHOOK secret to GitHub Secrets for deployment notifications
+# - Regularly review and update the ECS task definition file to ensure it matches the application requirements
+# - Consider implementing a staging environment and adding a manual approval step before production deployment
+# - Set up monitoring and alerting for the ECS service to quickly identify any issues post-deployment
